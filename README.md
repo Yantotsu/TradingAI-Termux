@@ -13,6 +13,10 @@ Pelatihan pertama memerlukan internet dan dapat memakan waktu. Gunakan `--traini
 
 Batas ini adalah preset perangkat lunak, bukan angka optimal dan bukan saran investasi personal. Ekuitas live yang dipakai untuk sizing adalah saldo IDR free+locked ditambah posisi yang dicatat bot; aset lain pada akun tidak dihitung. Batas harian dimulai dari ekuitas saat bot pertama kali melihat tanggal lokal itu. Stop loss dikelola oleh proses bot, bukan order stop di exchange, sehingga tidak bekerja jika Termux mati atau jaringan terputus.
 
+## Akun web (fondasi backend)
+
+Fondasi backend Supabase untuk akun undangan, isolasi data per user melalui RLS, dan buku besar saldo simulasi ada di [`docs/ACCOUNT_BACKEND.md`](docs/ACCOUNT_BACKEND.md). Ini belum disambungkan ke situs dan belum menerima uang asli. Jangan mencatat deposit pengguna di saldo simulasi. Rahasia produksi disimpan pada Supabase Edge Function Secrets; file `.env` lokal diabaikan Git.
+
 ## Mode simulasi
 
 ```sh

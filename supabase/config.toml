@@ -1,0 +1,7 @@
+project_id = "trading-ai-termux"
+
+[functions.issue-invite]
+verify_jwt = true
+
+[functions.redeem-invite]
+verify_jwt = true
