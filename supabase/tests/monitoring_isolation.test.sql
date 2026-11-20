@@ -19,7 +19,7 @@ on conflict (user_id) do nothing;
 
 select throws_ok(
   $$insert into public.account_admins(user_id) values ('00000000-0000-4000-8000-000000000001')$$,
-  '23514', 'monitoring_role_cannot_be_full_admin', 'monitor role cannot be upgraded to a full admin');
+  '23514', 'full_admin_cannot_be_monitoring_only', 'monitor role cannot be upgraded to a full admin');
 
 insert into public.service_monitoring(component, status, checked_at, latency_ms, build_id)
 values ('site', 'healthy', now(), 25, 'test-build')
