@@ -20,6 +20,7 @@ create table if not exists public.access_invites (
   id uuid primary key default gen_random_uuid(),
   code_hash bytea not null unique,
   created_by uuid not null references auth.users(id),
+  invite_email text not null check (length(invite_email) <= 254 and invite_email ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'),
   created_at timestamptz not null default now(),
   expires_at timestamptz not null,
   claimed_by uuid unique references auth.users(id),
@@ -42,6 +43,17 @@ create table if not exists public.demo_ledger (
 );
 create index if not exists demo_ledger_user_created_idx
   on public.demo_ledger(user_id, created_at desc);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'demo_ledger'
+  ) then
+    alter publication supabase_realtime add table public.demo_ledger;
+  end if;
+end;
+$$;
 
 alter table public.account_profiles enable row level security;
 alter table public.account_admins enable row level security;
@@ -76,7 +88,7 @@ as
 revoke all on public.demo_balance from anon, authenticated;
 grant select on public.demo_balance to authenticated;
 
-create or replace function public.issue_access_invite(p_ttl_days integer default 7)
+create or replace function public.issue_access_invite(p_ttl_days integer, p_email text)
 returns text
 language plpgsql
 security definer
@@ -84,24 +96,52 @@ set search_path = ''
 as $$
 declare
   v_code text;
+  v_email text := nullif(lower(trim(p_email)), '');
 begin
   if auth.uid() is null or not exists (
     select 1 from public.account_admins a where a.user_id = auth.uid()
   ) then
     raise exception 'not_authorized' using errcode = '42501';
   end if;
+  if v_email is null or length(v_email) > 254 or v_email !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' then
+    raise exception 'invalid_invite_email' using errcode = '22023';
+  end if;
   v_code := upper(encode(extensions.gen_random_bytes(24), 'hex'));
-  insert into public.access_invites(code_hash, created_by, expires_at)
+  insert into public.access_invites(code_hash, created_by, invite_email, expires_at)
   values (
     extensions.digest(convert_to(v_code, 'UTF8'), 'sha256'),
-    auth.uid(),
+    auth.uid(), v_email,
     now() + make_interval(days => greatest(1, least(coalesce(p_ttl_days, 7), 30)))
   );
   return v_code;
 end;
 $$;
-revoke all on function public.issue_access_invite(integer) from public, anon;
-grant execute on function public.issue_access_invite(integer) to authenticated;
+revoke all on function public.issue_access_invite(integer, text) from public, anon;
+grant execute on function public.issue_access_invite(integer, text) to authenticated;
+
+
+create or replace function public.validate_access_invite(p_code text, p_email text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select case
+    when p_code is null or length(trim(p_code)) <> 48
+      or trim(p_code) !~ '^[A-Fa-f0-9]{48}$'
+      or p_email is null or length(trim(p_email)) > 254
+      then false
+    else exists (
+      select 1 from public.access_invites i
+      where i.code_hash = extensions.digest(convert_to(upper(trim(p_code)), 'UTF8'), 'sha256')
+        and i.invite_email = lower(trim(p_email))
+        and i.claimed_by is null and i.disabled_at is null and i.expires_at > now()
+    )
+  end;
+$$;
+revoke all on function public.validate_access_invite(text, text) from public;
+grant execute on function public.validate_access_invite(text, text) to anon, authenticated;
 
 create or replace function public.redeem_access_invite(p_code text)
 returns boolean
@@ -113,6 +153,7 @@ declare
   v_user uuid := auth.uid();
   v_hash bytea;
   v_invite uuid;
+  v_email text;
   v_status text;
 begin
   if v_user is null then
@@ -123,6 +164,9 @@ begin
   end if;
   select p.access_status into v_status
     from public.account_profiles p where p.user_id = v_user;
+  select lower(u.email) into v_email from auth.users u
+   where u.id = v_user and u.email_confirmed_at is not null;
+  if v_email is null then return false; end if;
   if v_status = 'blocked' then return false; end if;
   if v_status = 'active' then return true; end if;
 
@@ -133,6 +177,7 @@ begin
      and i.claimed_by is null
      and i.disabled_at is null
      and i.expires_at > now()
+     and i.invite_email = v_email
    returning i.id into v_invite;
   if v_invite is null then return false; end if;
 
@@ -166,7 +211,8 @@ begin
   ) then
     raise exception 'not_authorized' using errcode = '42501';
   end if;
-  if p_amount_idr is null or p_amount_idr = 0 or p_memo is null
+  if p_amount_idr is null or p_amount_idr = 0
+     or p_amount_idr not between -1000000000000 and 1000000000000 or p_memo is null
      or length(trim(p_memo)) not between 1 and 240
      or p_idempotency_key is null or length(p_idempotency_key) not between 8 and 120 then
     raise exception 'invalid_adjustment' using errcode = '22023';
@@ -192,3 +238,17 @@ end;
 $$;
 revoke all on function public.admin_adjust_demo_balance(uuid, bigint, text, text) from public, anon;
 grant execute on function public.admin_adjust_demo_balance(uuid, bigint, text, text) to authenticated;
+
+create or replace function public.is_current_user_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select auth.uid() is not null and exists (
+    select 1 from public.account_admins a where a.user_id = auth.uid()
+  );
+$$;
+revoke all on function public.is_current_user_admin() from public, anon;
+grant execute on function public.is_current_user_admin() to authenticated;

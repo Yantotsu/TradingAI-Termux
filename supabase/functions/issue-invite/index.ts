@@ -9,12 +9,17 @@ Deno.serve(async (request: Request) => {
   if (authError || !user) return jsonResponse({ error: "authentication_required" }, 401);
 
   let ttlDays = 7;
+  let email = "";
   try {
     const body = await request.json();
     if (Number.isInteger(body?.ttl_days)) ttlDays = Math.max(1, Math.min(30, body.ttl_days));
-  } catch { /* use default expiry */ }
+    email = String(body?.email ?? "").trim().toLowerCase();
+  } catch { return jsonResponse({ error: "invalid_request" }, 400); }
+  if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return jsonResponse({ error: "valid_invitee_email_required" }, 400);
+  }
 
-  const { data, error } = await client.rpc("issue_access_invite", { p_ttl_days: ttlDays });
+  const { data, error } = await client.rpc("issue_access_invite", { p_ttl_days: ttlDays, p_email: email });
   if (error) {
     const status = error.code === "42501" ? 403 : 400;
     return jsonResponse({ error: status === 403 ? "not_authorized" : "invite_creation_failed" }, status);

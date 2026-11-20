@@ -21,4 +21,4 @@ export function getUserClient(request: Request) {
   return createClient(url, publishableKey, { global: { headers: { Authorization: authorization } } });
 }
 
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient } from "npm:@supabase/supabase-js@2.119.1";
