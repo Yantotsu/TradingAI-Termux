@@ -11,18 +11,12 @@ Status: source backend sudah disiapkan, tetapi belum terhubung ke proyek Supabas
 
 ## Rahasia
 
-`SUPABASE_PUBLISHABLE_KEY` boleh dipakai di browser setelah RLS aktif. Jangan pernah menaruh secret/service-role key di HTML, GitHub Pages, atau variabel `PUBLIC_*`. Fungsi ini memakai JWT pengguna dan hak database terbatas; operasi istimewa dikunci dengan tabel `account_admins`. Untuk rahasia produksi gunakan Supabase Dashboard → Edge Function Secrets. Untuk lokal, salin `.env.example` ke `supabase/functions/.env` (sudah diabaikan Git). Jangan commit file `.env`.
+`SUPABASE_PUBLISHABLE_KEY` boleh dipakai di browser setelah RLS aktif. Jangan pernah menaruh secret/service-role key di HTML, GitHub Pages, atau variabel `PUBLIC_*`. Fungsi ini memakai JWT pengguna dan hak database terbatas; operasi istimewa dikunci dengan tabel `account_admins`. Untuk rahasia produksi gunakan Supabase Dashboard → Edge Function Secrets. Untuk deployment CLI terotomasi, token Supabase dan password database disimpan sebagai GitHub Actions secrets di repo privat. Untuk lokal, salin `.env.example` ke `supabase/functions/.env` (sudah diabaikan Git). Jangan commit file `.env`.
 
 ## Menyiapkan proyek Supabase
 
 1. Buat proyek Supabase dan catat Project URL serta publishable key. Jangan kirim database password atau secret/service-role key melalui chat.
-2. Jalankan migrasi lewat Supabase CLI dari repo privat:
-
-   ```sh
-   supabase login
-   supabase link --project-ref PROJECT_REF
-   supabase db push
-   ```
+2. Di settings repo privat, tambahkan **Actions variable** `SUPABASE_PROJECT_REF` dan dua **Actions secrets**: `SUPABASE_ACCESS_TOKEN` (token akun Supabase) serta `SUPABASE_DB_PASSWORD`. Jalankan Actions → **Deploy Supabase backend** secara manual. Workflow hanya berjalan dari branch `main`, menerapkan migrasi, dan deploy dua fungsi. Rahasia tidak dicetak ke log. Untuk penguncian tambahan, atur required reviewer pada environment `supabase-production`.
 3. Buat akun pemilik melalui Supabase Auth. Dari SQL Editor Supabase, masukkan UUID user pemilik ke daftar admin:
 
    ```sql
@@ -32,14 +26,7 @@ Status: source backend sudah disiapkan, tetapi belum terhubung ke proyek Supabas
    values ('GANTI_DENGAN_AUTH_USER_UUID');
    ```
 
-4. Deploy fungsi dengan JWT verification aktif:
-
-   ```sh
-   supabase functions deploy issue-invite
-   supabase functions deploy redeem-invite
-   ```
-
-   Jangan menonaktifkan RLS.
+4. Workflow backend mendeploy fungsi dengan JWT verification aktif dari `supabase/config.toml`. Jangan menonaktifkan RLS.
 5. Pemilik memasukkan email penerima lalu memanggil `issue-invite` saat login; kode tampil sekali, terikat ke email tersebut, dan diberikan langsung kepada orang yang disetujui. UI login dan admin untuk membuat kode tersedia di situs; pemilik harus menyambungkan proyek Supabase lewat variabel GitHub Actions sebelum dipakai.
 6. Setelah login, calon pengguna memvalidasi pasangan email/kode sebelum mendaftar, lalu mengirim kode ke `redeem-invite` setelah email terverifikasi. Database mengklaim kode dalam satu transaksi; klaim yang bersamaan tidak dapat memakai kode dua kali.
 7. Pastikan Data API hanya mengekspos objek yang perlu; jalankan audit/advisor Supabase dan uji RLS sebelum membuka situs.
