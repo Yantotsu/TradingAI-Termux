@@ -91,6 +91,15 @@ class IndodaxAPI:
             raise IndodaxAPIError("Respons myTrades Indodax tidak valid")
         return [row for row in data if isinstance(row, dict)]
 
+    def order_status(self, symbol: str, client_order_id: str) -> dict[str, object]:
+        result = self._call("GET", "/api/v2/order", {
+            "symbol": symbol.upper(), "origClientOrderId": client_order_id,
+        })
+        data = self._data(result)
+        if not isinstance(data, dict):
+            raise IndodaxAPIError("Respons status order Indodax tidak valid")
+        return data
+
     def create_market_order(self, symbol: str, side: str, *, quote_idr: int | None = None,
                             quantity: str | None = None, client_order_id: str) -> object:
         side = side.upper()

@@ -247,10 +247,31 @@ def _execute(api: IndodaxAPI, store: LiveStore, side: str, *, quote_idr: int | N
         if fills:
             break
         time.sleep(1)
+    order = api.order_status(store.symbol, client_id)
+    if (str(order.get("clientOrderId", "")) != client_id
+            or str(order.get("symbol", "")).upper() != store.symbol
+            or str(order.get("side", "")).upper() != side):
+        raise LiveSafetyStop(f"Identitas/status order {client_id} tidak cocok; rekonsiliasi manual diperlukan")
+    status = str(order.get("status", "")).upper()
+    if status not in {"FILLED", "CANCELED", "REJECTED", "EXPIRED"}:
+        raise LiveSafetyStop(f"Order {client_id} belum berstatus terminal ({status or 'tidak diketahui'}); periksa manual")
     open_orders = api.open_orders(store.symbol)
     is_open = any(str(row.get("clientOrderId", row.get("newClientOrderId", ""))) == client_id
                   for row in open_orders)
-    result = store.settle_order(client_id, side, fills, is_open=is_open)
     if is_open:
-        raise LiveSafetyStop(f"Order {client_id} masih terbuka/parsial. Posisi tercatat; periksa manual.")
+        raise LiveSafetyStop(f"Order {client_id} berstatus terminal tetapi masih terdaftar terbuka; rekonsiliasi manual")
+    try:
+        executed_qty = float(order.get("executedQty", "nan"))
+        fill_qty = sum(float(fill["qty"]) for fill in fills)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise LiveSafetyStop(f"Kuantitas eksekusi order {client_id} tidak valid") from exc
+    if (not math.isfinite(executed_qty) or executed_qty <= 0
+            or not math.isclose(fill_qty, executed_qty, rel_tol=1e-8, abs_tol=1e-12)):
+        raise LiveSafetyStop(f"Jumlah fill order {client_id} tidak cocok dengan executedQty; rekonsiliasi manual diperlukan")
+    result = store.settle_order(client_id, side, fills, is_open=False)
+    if status != "FILLED":
+        store.db.execute("UPDATE live_orders SET status=? WHERE client_order_id=?",
+                         (f"PARTIAL_{status}", client_id))
+        store.db.commit()
+        raise LiveSafetyStop(f"Order {client_id} terminal {status} dengan fill parsial; posisi tercatat, periksa manual")
     return result

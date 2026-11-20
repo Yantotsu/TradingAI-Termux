@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import math
 import os
@@ -11,6 +12,7 @@ import shutil
 import sys
 import time
 import textwrap
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -157,6 +159,21 @@ def resolve_symbol(requested: str, max_spread_pct: float, reselect: bool) -> str
     return selected.symbol
 
 
+@contextmanager
+def single_instance_lock(lock_path: Path):
+    """Prevent two local bot processes from submitting orders against one DB/account."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise LiveSafetyStop("Bot lain masih berjalan untuk instalasi ini; hentikan duplikasi sebelum lanjut") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 class PaperStore:
     def __init__(self, symbol: str, initial_idr: float) -> None:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -208,9 +225,11 @@ class PaperStore:
                                (self.symbol, limit)).fetchall()
         return [float(row["price"]) for row in reversed(rows)]
 
-    def daily_pnl(self, liquidation_price: float, loss_limit_fraction: float) -> tuple[bool, float]:
+    def daily_pnl(self, liquidation_price: float, loss_limit_fraction: float,
+                  fee_rate: float) -> tuple[bool, float]:
         account = self.account()
-        equity = account["cash_idr"] + account["quantity"] * liquidation_price
+        gross_position = account["quantity"] * liquidation_price
+        equity = account["cash_idr"] + gross_position - gross_position * fee_rate
         day = datetime.now().astimezone().date().isoformat()
         self.db.execute("INSERT OR IGNORE INTO daily_marks(symbol,day,start_equity) VALUES(?,?,?)",
                         (self.symbol, day, equity))
@@ -363,7 +382,7 @@ def write_web_status(payload: dict[str, object]) -> None:
     temporary.replace(status_path)
 
 
-def run(args: argparse.Namespace) -> None:
+def _run_locked(args: argparse.Namespace) -> None:
     if args.mode == "live" and args.live_confirm != "I_ACCEPT_REAL_TRADING_RISK":
         raise LiveSafetyStop("Live mode memerlukan --live-confirm I_ACCEPT_REAL_TRADING_RISK")
     symbol = resolve_symbol(args.symbol, args.max_spread_pct, args.reselect_auto)
@@ -438,7 +457,7 @@ def run(args: argparse.Namespace) -> None:
                         raise LiveSafetyStop("Saldo aset bebas lebih kecil dari posisi bot; rekonsiliasi manual diperlukan")
                     idr_free = _balance(account_info, "IDR", "free")
                     idr_locked = _balance(account_info, "IDR", "locked")
-                    equity = idr_free + idr_locked + qty * market.bid
+                    equity = idr_free + idr_locked + qty * market.bid * (1 - fee_rate)
                     hit_limit, daily_pnl = store.daily_pnl(equity, limits.max_daily_loss_fraction)
                     if qty > 0 and hit_limit:
                         sell_qty = _rounded_quantity(min(qty, base_free), quantity_increment)
@@ -460,8 +479,9 @@ def run(args: argparse.Namespace) -> None:
                             event_quantity, event_price = float(sell_qty), market.bid
                 else:
                     account = store.account()
-                    equity = account["cash_idr"] + account["quantity"] * market.bid
-                    hit_limit, daily_pnl = store.daily_pnl(market.bid, limits.max_daily_loss_fraction)
+                    gross_position = account["quantity"] * market.bid
+                    equity = account["cash_idr"] + gross_position - gross_position * fee_rate
+                    hit_limit, daily_pnl = store.daily_pnl(market.bid, limits.max_daily_loss_fraction, fee_rate)
                     if account["quantity"] > 0 and hit_limit:
                         event_quantity = float(account["quantity"])
                         event_price = market.bid
@@ -494,8 +514,8 @@ def run(args: argparse.Namespace) -> None:
                     base_free = _balance(account_info, symbol.removesuffix("IDR"), "free")
                     idr_free = _balance(account_info, "IDR", "free")
                     idr_locked = _balance(account_info, "IDR", "locked")
-                    equity = idr_free + idr_locked + qty * market.bid
-                    position_value = qty * market.bid
+                    equity = idr_free + idr_locked + qty * market.bid * (1 - fee_rate)
+                    position_value = qty * market.bid * (1 - fee_rate)
                     order_cap = 0.0 if hit_limit else limits.allowed_order_value(
                         equity=equity, current_position_value=position_value, daily_pnl=daily_pnl
                     )
@@ -527,10 +547,11 @@ def run(args: argparse.Namespace) -> None:
                     account_info = _confirm_account(api)
                     equity = (_balance(account_info, "IDR", "free")
                               + _balance(account_info, "IDR", "locked")
-                              + float(position["quantity"]) * market.bid)
+                              + float(position["quantity"]) * market.bid * (1 - fee_rate))
                 else:
                     account = store.account()
-                    position_value = account["quantity"] * market.bid
+                    gross_position = account["quantity"] * market.bid
+                    position_value = gross_position - gross_position * fee_rate
                     order_cap = 0.0 if hit_limit else limits.allowed_order_value(
                         equity=equity, current_position_value=position_value, daily_pnl=daily_pnl
                     )
@@ -555,7 +576,8 @@ def run(args: argparse.Namespace) -> None:
                         note = store.trade("SELL", market.bid, 0, fee_rate, f"Skor ML naik={prediction.score_up:.3f}; {prediction.explanation}")
                         event = "SELL"
                     updated = store.account()
-                    equity = updated["cash_idr"] + updated["quantity"] * market.bid
+                    gross_position = updated["quantity"] * market.bid
+                    equity = updated["cash_idr"] + gross_position - gross_position * fee_rate
                 if args.mode == "live":
                     display_position = store.position()
                     display_quantity = float(display_position["quantity"])
@@ -621,6 +643,12 @@ def run(args: argparse.Namespace) -> None:
             web_server.shutdown()
             web_server.server_close()
         store.close()
+
+def run(args: argparse.Namespace) -> None:
+    lock_path = DB_PATH.with_name("trading-bot.lock")
+    with single_instance_lock(lock_path):
+        _run_locked(args)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Pemantau Indodax spot dengan simulasi realistis")

@@ -36,3 +36,26 @@ Status: source backend sudah disiapkan, tetapi belum terhubung ke proyek Supabas
 Admin dapat memberi atau mengoreksi kredit paper melalui panel admin; fungsi `admin_adjust_demo_balance` hanya mengubah saldo simulasi. Ia tidak memverifikasi bukti pembayaran dan **tidak boleh dipakai untuk mengkredit uang asli**. Dana pelanggan/top-up nyata baru dapat dirancang setelah model bisnis dan jalur pembayaran/custody yang sesuai hukum disepakati, termasuk rekonsiliasi, bukti transaksi, penanganan komplain/pengembalian, dan audit.
 
 Jika layanan menerima atau menyimpan nilai pembayaran pengguna, klasifikasi dan izin harus dikonfirmasi dengan penasihat hukum serta mitra pembayaran berizin. Bank Indonesia mengatur perizinan PJP dan menjelaskan penyelenggara dompet elektronik serta payment gateway memerlukan izin. Jika layanan juga mengelola investasi/perdagangan untuk orang lain, kewajiban OJK dapat berlaku bergantung produk dan model operasinya. Ini bukan kesimpulan hukum untuk model bisnis tertentu.
+
+
+Before connecting a payment provider or enabling real-money operation, complete the [production readiness and payment safety gates](PRODUCTION_READINESS.md). The present schema is intentionally simulation-only.
+
+Admin invitation creation and demo-balance adjustment require Supabase AAL2 (TOTP MFA). The dashboard enrolls an admin in an authenticator app and challenges the factor before showing admin controls; PostgreSQL checks the AAL claim again on every privileged write. Enable TOTP enrollment and verification in the Supabase Auth settings, then test both aal1 rejection and aal2 success before using admin functions.
+
+## Restricted test-monitor account
+
+A test-monitor account is a normal, email-verified account with an account_profiles row and a monitoring_admins row. Do not add it to account_admins. The monitoring role can only read component-level statuses in service_monitoring with an AAL2 session. That table has no user IDs, balances, orders, credentials, or free-form log field; only the trusted service_role can write it. RLS denies it access to other users' profiles and ledgers. The monitor role cannot issue invites or alter any balance.
+
+After creating and verifying the dedicated test account in Supabase Auth, add its UUID using the Supabase SQL Editor:
+
+    insert into public.account_profiles(user_id, access_status)
+    values ('TEST_ACCOUNT_AUTH_UUID', 'active');
+    insert into public.monitoring_admins(user_id)
+    values ('TEST_ACCOUNT_AUTH_UUID');
+
+Do not reuse the owner/admin account for this test role. The monitor must enroll an authenticator factor; the health table is readable only at AAL2. Populate service_monitoring only with coarse subsystem states and an optional build identifier; keep diagnostic detail in protected server logs with separate operator controls.
+
+
+The restricted monitoring role is distinct from the owner admin role. Its database test suite checks AAL2 enforcement, per-user profile/ledger isolation, and rejection of invite or balance-changing operations. The release workflow should pass the local Supabase RLS tests before this migration is applied to production.
+
+The schema also enforces mutual exclusion between monitoring_admins and account_admins with database triggers. A monitoring account cannot be upgraded to the invitation/balance-admin role by adding it to account_admins; create a different owner account for those duties.

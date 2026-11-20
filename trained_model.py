@@ -16,8 +16,10 @@ from urllib.request import Request, urlopen
 
 BASE_URL = "https://indodax.com"
 TIMEFRAME_MINUTES = 60
+CANDLE_SECONDS = TIMEFRAME_MINUTES * 60
 HORIZON = 4
 FEATURE_COUNT = 6
+MODEL_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,12 @@ def _get_json(url: str) -> object:
 
 def fetch_candles(symbol: str, start_ts: int, end_ts: int, timeframe: str = "60") -> list[dict[str, float]]:
     """Fetch and normalize candles from Indodax's documented OHLC history API."""
+    try:
+        candle_seconds = int(timeframe) * 60
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Timeframe candle tidak valid") from exc
+    if candle_seconds <= 0 or end_ts <= start_ts:
+        raise ValueError("Rentang/timeframe candle tidak valid")
     query = urlencode({"from": start_ts, "symbol": symbol.upper(), "tf": timeframe, "to": end_ts})
     payload = _get_json(f"{BASE_URL}/tradingview/history_v2?{query}")
     if not isinstance(payload, list):
@@ -61,13 +69,27 @@ def fetch_candles(symbol: str, start_ts: int, end_ts: int, timeframe: str = "60"
         values = [candle[k] for k in ("open", "high", "low", "close", "volume")]
         if (not all(math.isfinite(x) for x in values) or candle["close"] <= 0
                 or min(candle["open"], candle["high"], candle["low"]) <= 0
-                or candle["volume"] < 0 or candle["high"] < candle["low"]):
+                or candle["volume"] < 0
+                or candle["high"] < max(candle["open"], candle["close"])
+                or candle["low"] > min(candle["open"], candle["close"])):
+            continue
+        # A candle is usable only once its full interval ended, and never beyond
+        # the requested range. This keeps partial current-hour OHLC out of both
+        # training labels and live inference.
+        if stamp < start_ts or stamp + candle_seconds > min(end_ts, int(time.time())):
             continue
         candles[stamp] = candle
     result = [candles[k] for k in sorted(candles)]
     if len(result) < 20:
         raise RuntimeError(f"Data OHLC {symbol} terlalu sedikit/terputus ({len(result)} candle)")
     return result
+
+
+def _has_contiguous_hourly_window(candles: Sequence[dict[str, float]], start: int, end: int) -> bool:
+    return all(
+        int(candles[i + 1]["time"] - candles[i]["time"]) == CANDLE_SECONDS
+        for i in range(start, end)
+    )
 
 
 def _features(candles: Sequence[dict[str, float]], index: int) -> list[float]:
@@ -100,6 +122,8 @@ def train(candles: Sequence[dict[str, float]], *, symbol: str, fee_rate: float,
     last_index = len(candles) - HORIZON - 1
     examples: list[tuple[list[float], int]] = []
     for index in range(12, last_index + 1):
+        if not _has_contiguous_hourly_window(candles, index - 12, index + HORIZON):
+            continue
         forward_return = candles[index + HORIZON]["close"] / candles[index]["close"] - 1.0
         examples.append((_features(candles, index), int(forward_return > cost_threshold)))
     if len(examples) < 200:
@@ -153,12 +177,15 @@ def train(candles: Sequence[dict[str, float]], *, symbol: str, fee_rate: float,
                          if positives and negatives else 0.0)
     prevalence = positives / len(valid_predictions)
     model = {
-        "version": 1, "symbol": symbol.upper(), "training_days": training_days,
+        "version": MODEL_VERSION, "symbol": symbol.upper(), "training_days": training_days,
         "fee_rate": fee_rate, "timeframe_minutes": TIMEFRAME_MINUTES,
         "horizon_candles": HORIZON, "cost_threshold": cost_threshold,
         "means": means, "scales": scales, "weights": weights,
         "validation_accuracy": accuracy, "validation_balanced_accuracy": balanced_accuracy,
         "validation_baseline": 0.5,
+        # A single chronological holdout is not sufficient evidence for live funds.
+        # Promotion requires a separately reviewed, cost-aware walk-forward report.
+        "live_approved": False,
         "validation_samples": len(valid_examples), "validation_positive_rate": prevalence,
         "training_samples": len(train_examples), "candle_count": len(candles),
         "trained_at": int(time.time()),
@@ -176,14 +203,20 @@ def predict(model: dict[str, Any], candles: Sequence[dict[str, float]], *,
     if len(candles) < 13:
         raise RuntimeError("Model memerlukan minimal 13 candle terbaru")
     index = len(candles) - 1
+    if not _has_contiguous_hourly_window(candles, index - 12, index):
+        raise RuntimeError("Candle terbaru tidak berurutan per jam; prediksi ditahan sampai data valid")
     features = _features(candles, index)
     normalized = [(features[j] - model["means"][j]) / model["scales"][j] for j in range(FEATURE_COUNT)]
     weights = model["weights"]
     probability = _sigmoid(weights[0] + sum(weights[j + 1] * normalized[j] for j in range(FEATURE_COUNT)))
     if not 0 < sell_threshold < buy_threshold < 1:
         raise ValueError("Ambang sinyal model tidak valid")
-    if (not allow_unvalidated
-            and model["validation_balanced_accuracy"] <= model["validation_baseline"]):
+    if not allow_unvalidated and model.get("live_approved") is not True:
+        action = "HOLD"
+        reason = ("model belum disetujui untuk dana nyata; evaluasi walk-forward dan biaya penuh belum lulus "
+                  f"(validasi berimbang {float(model['validation_balanced_accuracy']):.1%})")
+    elif (not allow_unvalidated
+          and model["validation_balanced_accuracy"] <= model["validation_baseline"]):
         action = "HOLD"
         reason = "validasi berimbang belum mengungguli peluang acak"
     elif probability >= buy_threshold:
@@ -201,7 +234,7 @@ def train_from_exchange(symbol: str, *, fee_rate: float, days: int, model_path: 
         try:
             cached = json.loads(model_path.read_text(encoding="utf-8"))
             age = time.time() - float(cached.get("trained_at", 0))
-            if (cached.get("version") == 1 and cached.get("symbol") == symbol.upper()
+            if (cached.get("version") == MODEL_VERSION and cached.get("symbol") == symbol.upper()
                     and cached.get("training_days") == days
                     and abs(float(cached.get("fee_rate", -1)) - fee_rate) < 1e-12
                     and 0 <= age < 86400):

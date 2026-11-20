@@ -1,7 +1,37 @@
-project_id = "trading-ai-termux"
+# Local Supabase stack configuration. This is not the hosted project reference.
+project_id = "tradingai-termux-local"
+
+[api]
+enabled = true
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+major_version = 15
 
 [functions.issue-invite]
 verify_jwt = true
 
 [functions.redeem-invite]
 verify_jwt = true
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:3000"
+additional_redirect_urls = [
+  "http://localhost:3000",
+  "https://yantotsu.github.io/TradingAI-Termux-Site/",
+]
+enable_signup = true
+enable_anonymous_sign_ins = false
+enable_refresh_token_rotation = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = true
+max_frequency = "1m"
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true

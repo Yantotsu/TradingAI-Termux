@@ -57,3 +57,7 @@ python bot.py --mode live --symbol AUTO --interval 60 \
 ```
 
 Live belum pernah dijalankan atau diverifikasi dengan akunmu. Mulai dari paper terlebih dahulu. Android dapat menghentikan proses latar belakang; koneksi dan Termux harus tetap aktif agar pemantauan berjalan. Saya bisa membantu merawat kode saat kamu kembali, tetapi tidak bisa mengawasi bot terus-menerus dari luar sesi ini.
+
+Before enabling any account or payment feature, review [production readiness and payment safety](docs/PRODUCTION_READINESS.md). Top-ups and real-money trading remain disabled until the merchant/custody model, legal review, sandbox tests, and settlement reconciliation are complete.
+
+Review [audit bot publik dan rancangan operasi multi-pengguna](docs/PUBLIC_BOT_AUDIT.md) sebelum mengaktifkan live; saat ini model belum disetujui dan dashboard belum menjalankan bot akun pengguna.

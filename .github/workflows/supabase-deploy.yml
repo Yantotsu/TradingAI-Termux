@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   deploy:
@@ -14,6 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Require passing quality and database isolation checks for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh run list --workflow quality.yml --commit "$GITHUB_SHA" --limit 20 --json conclusion,status,createdAt --jq 'sort_by(.createdAt) | last | select(.status == "completed") | .conclusion')
+          test "$latest" = success || { echo "The latest quality.yml run must succeed for this exact commit"; exit 1; }
       - uses: supabase/setup-cli@v3
         with:
           version: v2.stable
