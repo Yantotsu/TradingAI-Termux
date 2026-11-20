@@ -18,7 +18,7 @@
 </head>
 <body>
 <div class="wrap">
-<header class="top"><div class="brand"><div class="logo">⌁</div><div><h1>TRADING AI</h1><small>Panel pemantauan lokal · Indodax</small></div></div><div class="connection"><i id="dot" class="dot"></i><span id="connection">Menyambungkan…</span></div></header>
+<header class="top"><div class="brand"><div class="logo">⌁</div><div><h1>TRADING AI</h1><small>Dashboard pasar publik · Indodax</small></div></div><div class="connection"><i id="dot" class="dot"></i><span id="connection">Menyambungkan…</span></div></header>
 <main class="grid">
 <section class="card metric"><div class="label">Harga BTCIDR</div><div class="value" id="price">—</div><div class="sub" id="updated">Menunggu data bot</div></section>
 <section class="card metric"><div class="label">Perubahan grafik</div><div class="value" id="change">—</div><div class="sub">rentang candle yang tersedia</div></section>
@@ -36,8 +36,46 @@ const $=id=>document.getElementById(id), fmtIDR=n=>'Rp'+Number(n||0).toLocaleStr
 let previousEvent=0, lastData=null;
 function renderChart(values){const el=$('chart');if(!values||values.length<2){el.innerHTML='<div class="empty">Menunggu cukup data candle untuk menggambar grafik.</div>';return}const W=760,H=235,L=42,R=12,T=12,B=25,lo=Math.min(...values),hi=Math.max(...values),span=hi-lo||Math.max(1,hi*.001),x=i=>L+i*(W-L-R)/(values.length-1),y=v=>T+(hi-v)*(H-T-B)/span,pts=values.map((v,i)=>[x(i),y(v)]),line=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+','+p[1].toFixed(1)).join(' '),area=line+` L${x(values.length-1)},${H-B} L${L},${H-B} Z`,last=pts.at(-1);el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Grafik harga seperti gunung"><defs><linearGradient id="mountainFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#48cfff" stop-opacity=".34"/><stop offset="100%" stop-color="#6258e8" stop-opacity=".015"/></linearGradient></defs><line class="gridline" x1="${L}" y1="${T}" x2="${W-R}" y2="${T}"/><line class="gridline" x1="${L}" y1="${(T+H-B)/2}" x2="${W-R}" y2="${(T+H-B)/2}"/><line class="gridline" x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}"/><text class="axis" x="0" y="${T+4}">${fmtIDR(hi)}</text><text class="axis" x="0" y="${H-B+3}">${fmtIDR(lo)}</text><path class="area" d="${area}"/><path class="mountain" d="${line}"/><circle class="current" cx="${last[0]}" cy="${last[1]}" r="4"/><text class="axis" x="${last[0]-40}" y="${Math.max(12,last[1]-10)}">${fmtIDR(values.at(-1))}</text></svg>`}
 function animateEvent(data){const id=Number(data.event_id||0),kind=data.event;if(!kind||id<=previousEvent){previousEvent=Math.max(previousEvent,id);return}previousEvent=id;const cls=kind.toLowerCase().includes('buy')?'buy':kind.toLowerCase().includes('stop')?'stop':'sell';$('event').className='event show '+cls;$('eventIcon').textContent=cls==='buy'?'↗':cls==='sell'?'↘':'⛔';$('eventTitle').textContent=kind.toUpperCase().replace('_',' ');$('eventDetail').textContent=`${fmtQty(data.event_quantity)} ${String(data.symbol||'').replace('IDR','')} · ${fmtIDR(data.event_price)}`;setTimeout(()=>$('event').className='event',1800)}
-function update(d){lastData=d;$('dot').classList.toggle('online',!!d.running);$('connection').textContent=d.running?'TERHUBUNG':'BOT BELUM MENGIRIM DATA';$('price').textContent=fmtIDR(d.price);$('updated').textContent=d.updated_at?'Diperbarui '+new Date(d.updated_at).toLocaleTimeString('id-ID'):'Menunggu data bot';$('change').textContent=d.change_pct==null?'—':(d.change_pct>=0?'+':'')+Number(d.change_pct).toFixed(2)+'%';$('change').className='value '+(d.change_pct>=0?'positive':'negative');$('equity').textContent=fmtIDR(d.equity);$('pnl').textContent='P/L hari ini '+fmtIDR(d.daily_pnl);$('pnl').className='sub '+(d.daily_pnl>=0?'positive':'negative');$('mode').textContent=d.mode==='SIMULASI'?'PAPER':'LIVE';$('symbol').textContent=d.symbol||'—';$('score').textContent=Number(d.score||0).toFixed(3);$('meter').style.width=Math.max(0,Math.min(100,Number(d.score||0)*100))+'%';$('validation').textContent=pct(d.validation);$('reason').textContent=d.reason||d.note||'Tidak ada alasan tambahan.';const a=$('action');a.textContent=d.action||'HOLD';a.className='badge '+String(d.action||'hold').toLowerCase();$('quantity').textContent=fmtQty(d.quantity)+' '+String(d.symbol||'').replace('IDR','');$('entry').textContent=d.quantity>0?fmtIDR(d.entry_price):'—';$('positionValue').textContent=d.quantity>0?fmtIDR(d.position_value):'—';const stop=$('stop');if(d.quantity>0){stop.className='stopline';stop.textContent=`STOP-LOSS · aktif di ${fmtIDR(d.stop_price)} (−${Number(d.stop_loss_pct||2).toFixed(1)}% dari harga masuk)`}else{stop.className='stopline off';stop.textContent='STOP-LOSS · menunggu posisi aktif'}$('buyRule').textContent=d.mode==='SIMULASI'?'Skor ≥ 0,200 (eksperimen)':'Skor ≥ 0,600 + validasi > 50%';$('sellRule').textContent=d.mode==='SIMULASI'?'Skor ≤ 0,150':'Skor ≤ 0,400';$('spreadRule').textContent='≤ '+Number(d.max_spread_pct||.5).toFixed(2)+'%';renderChart(d.chart||[]);animateEvent(d)}
-async function poll(){try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error('status');update(await r.json())}catch(e){$('dot').classList.remove('online');$('connection').textContent='MENUNGGU SERVER TERMUX'}}poll();setInterval(poll,4000);
+function update(d){
+  lastData=d;
+  const isPublic=d.mode==='PUBLIC';
+  $('dot').classList.toggle('online',!!d.running);
+  $('connection').textContent=isPublic?'DATA PUBLIK · diperbarui otomatis':d.running?'TERHUBUNG KE TERMUX':'BOT BELUM MENGIRIM DATA';
+  $('price').textContent=fmtIDR(d.price);
+  $('updated').textContent=d.updated_at?'Diperbarui '+new Date(d.updated_at).toLocaleTimeString('id-ID'):'Menunggu data bot';
+  $('change').textContent=d.change_pct==null?'—':(d.change_pct>=0?'+':'')+Number(d.change_pct).toFixed(2)+'%';
+  $('change').className='value '+(d.change_pct>=0?'positive':'negative');
+  $('equity').textContent=isPublic?'PRIVAT':fmtIDR(d.equity);
+  $('pnl').textContent=isPublic?'Saldo dan P/L akun tidak dipublikasikan':'P/L hari ini '+fmtIDR(d.daily_pnl);
+  $('pnl').className='sub '+(isPublic?'':d.daily_pnl>=0?'positive':'negative');
+  $('mode').textContent=isPublic?'PUBLIK':d.mode==='SIMULASI'?'PAPER':'LIVE';
+  $('symbol').textContent=d.symbol||'—';
+  $('score').textContent=Number(d.score||0).toFixed(3);
+  $('meter').style.width=Math.max(0,Math.min(100,Number(d.score||0)*100))+'%';
+  $('validation').textContent=pct(d.validation);
+  $('reason').textContent=isPublic?(d.note||d.reason||'Sinyal pasar publik.'):d.note||d.reason||'Tidak ada alasan tambahan.';
+  const action=$('action');action.textContent=d.action||'HOLD';action.className='badge '+String(d.action||'hold').toLowerCase();
+  $('quantity').textContent=isPublic?'PRIVAT':fmtQty(d.quantity)+' '+String(d.symbol||'').replace('IDR','');
+  $('entry').textContent=isPublic?'PRIVAT':d.quantity>0?fmtIDR(d.entry_price):'—';
+  $('positionValue').textContent=isPublic?'PRIVAT':d.quantity>0?fmtIDR(d.position_value):'—';
+  const stop=$('stop');
+  if(isPublic){stop.className='stopline off';stop.textContent='Data posisi dan stop-loss pribadi tidak ditampilkan di situs publik'}
+  else if(d.quantity>0){stop.className='stopline';stop.textContent=`STOP-LOSS · aktif di ${fmtIDR(d.stop_price)} (−${Number(d.stop_loss_pct||2).toFixed(1)}% dari harga masuk)`}
+  else{stop.className='stopline off';stop.textContent='STOP-LOSS · menunggu posisi aktif'}
+  $('buyRule').textContent=d.mode==='SIMULASI'?'Skor ≥ 0,200 (eksperimen)':'Skor ≥ 0,600 + validasi > 50%';
+  $('sellRule').textContent=d.mode==='SIMULASI'?'Skor ≤ 0,150':'Skor ≤ 0,400';
+  $('spreadRule').textContent='≤ '+Number(d.max_spread_pct||.5).toFixed(2)+'%';
+  renderChart(d.chart||[]);animateEvent(d)
+}
+async function poll(){
+  try{
+    let data=null;
+    try{const local=await fetch('/api/status',{cache:'no-store'});if(local.ok)data=await local.json()}catch(_e){}
+    if(!data){const r=await fetch('data.json?ts='+Date.now(),{cache:'no-store'});if(!r.ok)throw Error('snapshot');data=await r.json()}
+    update(data)
+  }catch(e){$('dot').classList.remove('online');$('connection').textContent='DATA PUBLIK BELUM TERBIT';$('reason').textContent='Menunggu GitHub Actions menerbitkan snapshot data pasar.'}
+}
+poll();setInterval(poll,15000);
 </script>
 </body>
 </html>
